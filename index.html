@@ -109,6 +109,7 @@
       <button data-m="scurve">S-curve<br>(capped)</button>
     </div>
     <p class="modeldesc" id="modelDesc"></p>
+    <label class="checkline"><input type="checkbox" id="blendToggle" checked> One connected oval zone (both offices as foci)</label>
     <canvas id="chart"></canvas>
     <div id="params"></div>
     <button class="btn" id="resetBtn">Reset this model's defaults</button>
@@ -226,15 +227,28 @@ const OFFICES = [
   { name: 'North York', lat: 43.7709423, lng: -79.3292051 },
 ];
 
-/* Estimate: straight-line * detour, 60 km/h; cheapest office BY EFFORT. */
-function estimateQuote(lat, lng) {
-  let best = null;
-  for (const o of OFFICES) {
-    const km = haversineKm(lat, lng, o.lat, o.lng) * cfg.detour;
-    const q = feeFor(km, km, cfg, model);
-    if (!best || q.effort < best.quote.effort) best = { office: o, quote: q, exact: false };
+/* Zone geometry. blend=false: distance to the NEAREST office — iso-price
+ * contours are a union of two discs, which pinch apart near the offices.
+ * blend=true: the two-focus (elliptical) metric
+ *     d_eff = (d_A + d_NY - d_pair) / 2
+ * — zero along the whole corridor between the offices, growing outward in
+ * connected ovals with the offices as foci. Never two islands. */
+let blend = true;
+
+function effectiveKm(distances) {
+  if (blend && distances.length === 2) {
+    const pair = haversineKm(OFFICES[0].lat, OFFICES[0].lng, OFFICES[1].lat, OFFICES[1].lng) * cfg.detour;
+    return Math.max(0, (distances[0] + distances[1] - pair) / 2);
   }
-  return best;
+  return Math.min(...distances);
+}
+
+/* Estimate: straight-line * detour, 60 km/h. */
+function estimateQuote(lat, lng) {
+  const ds = OFFICES.map(o => haversineKm(lat, lng, o.lat, o.lng) * cfg.detour);
+  const nearest = OFFICES[ds[0] <= ds[1] ? 0 : 1];
+  const km = effectiveKm(ds);
+  return { office: nearest, quote: feeFor(km, km, cfg, model), exact: false };
 }
 
 async function exactQuote(lat, lng, token, excludeTolls) {
@@ -249,13 +263,23 @@ async function exactQuote(lat, lng, token, excludeTolls) {
     if (!body || body.code !== 'Ok' || !body.routes || !body.routes[0]) return null;
     return { office: o, km: body.routes[0].distance / 1000, min: body.routes[0].duration / 60 };
   }));
-  let best = null;
-  for (const r of results) {
-    if (!r) continue;
-    const q = feeFor(r.km, r.min, cfg, model);
-    if (!best || q.effort < best.quote.effort) best = { office: r.office, quote: q, exact: true, rawKm: r.km, rawMin: r.min };
+  const ok = results.filter(Boolean);
+  if (!ok.length) return null;
+  let km, min, office;
+  if (blend && ok.length === 2) {
+    // Toll-free road route Ajax <-> North York (401), measured once: ~33 km / 31 min.
+    const PAIR_KM = 33, PAIR_MIN = 31;
+    km  = Math.max(0, (ok[0].km + ok[1].km - PAIR_KM) / 2);
+    min = Math.max(0, (ok[0].min + ok[1].min - PAIR_MIN) / 2);
+    office = ok[0].km <= ok[1].km ? ok[0].office : ok[1].office;
+  } else {
+    let bestR = ok[0];
+    for (const r of ok) {
+      if (feeFor(r.km, r.min, cfg, model).effort < feeFor(bestR.km, bestR.min, cfg, model).effort) bestR = r;
+    }
+    km = bestR.km; min = bestR.min; office = bestR.office;
   }
-  return best;
+  return { office, quote: feeFor(km, min, cfg, model), exact: true, rawKm: km, rawMin: min };
 }
 
 /* ================================================================== map == */
@@ -381,6 +405,7 @@ function popupHtml(p) {
   else                   feeLine = `<div class="pp-fee">${fmt$(q.fee)}</div>`;
   const rows = [
     ['Dispatch from', r.office.name],
+    ['Zone shape', blend ? 'oval (two-focus)' : 'nearest office'],
     ['One-way', `${q.km.toFixed(1)} km · ${q.min.toFixed(0)} min`],
     ['Round-trip effort', fmt$(q.effort)],
     ['Free allowance', '− ' + fmt$(cfg.allowance)],
@@ -450,7 +475,7 @@ document.getElementById('clearBtn').onclick = () => { while (pins.length) remove
  * curve — model + every slider. Applied at boot, rewritten on any change. */
 let hashTimer = null;
 function writeHashNow() {
-  const p = new URLSearchParams({ m: model });
+  const p = new URLSearchParams({ m: model, blend: blend ? 1 : 0 });
   for (const k of Object.keys(cfg)) p.set(k, cfg[k]);
   history.replaceState(null, '', '#' + p.toString());
 }
@@ -467,6 +492,8 @@ function applyHash() {
   for (const [k, v] of h) {
     if (k !== 'm' && k in cfg && Number.isFinite(Number(v))) cfg[k] = Number(v);
   }
+  if (h.has('blend')) blend = h.get('blend') === '1';
+  document.getElementById('blendToggle').checked = blend;
   document.querySelectorAll('#modelPick button').forEach(x =>
     x.classList.toggle('active', x.dataset.m === model));
 }
@@ -652,6 +679,7 @@ const tokenInput = document.getElementById('tokenInput');
 tokenInput.value = localStorage.getItem(TOKEN_KEY) || '';
 tokenInput.addEventListener('input', () => { localStorage.setItem(TOKEN_KEY, tokenInput.value.trim()); updateTokenStatus(); });
 document.getElementById('heatToggle').onchange = (e) => { heatOn = e.target.checked; drawHeat(); };
+document.getElementById('blendToggle').onchange = (e) => { blend = e.target.checked; repriceAll(); };
 
 /* ================================================================ boot == */
 applyHash();
