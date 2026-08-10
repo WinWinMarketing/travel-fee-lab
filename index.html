@@ -1,0 +1,611 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Travel Fee Lab — curve designer + map</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+<style>
+  :root {
+    --navy: #14213d; --navy-2: #1f3a6d; --red: #dc1c2e;
+    --ink: #1a1d24; --muted: #5b6472; --line: #e3e7ee; --bg: #f7f8fa;
+    --free: #0e8a4a;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    font: 14px/1.45 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    color: var(--ink); background: var(--bg); display: flex; overflow: hidden;
+  }
+  #sidebar {
+    width: 360px; min-width: 360px; height: 100%; overflow-y: auto;
+    background: #fff; border-right: 1px solid var(--line); padding: 16px 16px 40px;
+  }
+  #sidebar h1 { font-size: 16px; margin: 0 0 2px; color: var(--navy); }
+  #sidebar .sub { color: var(--muted); font-size: 12px; margin: 0 0 12px; }
+  .card { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; margin-bottom: 12px; }
+  .card h2 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 0 0 10px; font-weight: 700; }
+  .modelpick { display: flex; gap: 6px; margin-bottom: 10px; }
+  .modelpick button {
+    flex: 1; border: 1px solid var(--line); background: #fff; border-radius: 7px;
+    padding: 6px 4px; font-size: 12px; cursor: pointer; color: var(--muted); font-weight: 600;
+  }
+  .modelpick button.active { background: var(--navy-2); border-color: var(--navy-2); color: #fff; }
+  .modeldesc { font-size: 11.5px; color: var(--muted); margin: 0 0 10px; }
+  #chart { width: 100%; height: 190px; display: block; border: 1px solid var(--line); border-radius: 8px; margin-bottom: 10px; }
+  label.param { display: block; margin-bottom: 8px; }
+  label.param .row { display: flex; justify-content: space-between; margin-bottom: 1px; }
+  label.param .name { font-size: 12px; }
+  label.param .val { font-variant-numeric: tabular-nums; font-weight: 700; color: var(--navy-2); font-size: 12px; }
+  input[type=range] { width: 100%; accent-color: var(--navy-2); margin: 0; }
+  .btn {
+    border: 1px solid var(--line); background: #fff; color: var(--navy-2); border-radius: 7px;
+    padding: 5px 10px; font-size: 12px; cursor: pointer; font-weight: 600;
+  }
+  .btn:hover { background: var(--bg); }
+  .btn-danger { color: var(--red); }
+  #tokenInput { width: 100%; border: 1px solid var(--line); border-radius: 7px; padding: 6px 8px; font-size: 11.5px; font-family: ui-monospace, Consolas, monospace; }
+  #tokenStatus { font-size: 11.5px; margin-top: 5px; }
+  .ok { color: var(--free); font-weight: 600; }
+  .warn { color: #b06000; }
+  .checkline { display: flex; align-items: center; gap: 7px; font-size: 12px; margin-bottom: 5px; }
+  .legend-row { display: flex; align-items: center; gap: 8px; font-size: 12px; margin-bottom: 3px; }
+  .swatch { width: 20px; height: 12px; border-radius: 3px; border: 1px solid rgba(0,0,0,0.15); }
+  #pinsList { margin: 0; padding: 0; list-style: none; max-height: 180px; overflow-y: auto; }
+  #pinsList li { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 5px 0; border-bottom: 1px solid var(--line); font-size: 12px; }
+  #pinsList .fee { font-weight: 700; color: var(--navy-2); font-variant-numeric: tabular-nums; }
+  #pinsList .x { cursor: pointer; color: var(--muted); border: none; background: none; font-size: 13px; }
+  #pinsList .x:hover { color: var(--red); }
+  .zone-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .zone-table td { padding: 3px 4px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  .zone-table td.fee { text-align: right; font-weight: 700; white-space: nowrap; }
+  .zone-table td.fee.free { color: var(--free); }
+  .zone-table .areas { color: var(--muted); font-size: 10.5px; }
+  details summary { cursor: pointer; }
+  #mapwrap { position: relative; flex: 1; height: 100%; }
+  #map { position: absolute; inset: 0; }
+  /* Lives inside a custom Leaflet pane (z 350: above tiles, below markers
+     and popups) so popups stay crisp above it. Sized in JS from map.getSize()
+     — a bare canvas otherwise collapses to its intrinsic 300x150. */
+  #heat { position: absolute; pointer-events: none; transition: opacity 0.15s; }
+  /* Live hover readout — THE price display. */
+  #readout {
+    position: absolute; top: 14px; right: 14px; z-index: 900; min-width: 190px;
+    background: rgba(20,33,61,0.94); color: #fff; border-radius: 12px;
+    padding: 12px 16px; box-shadow: 0 4px 18px rgba(0,0,0,0.3); pointer-events: none;
+  }
+  #readout .big { font-size: 30px; font-weight: 800; letter-spacing: -0.02em; line-height: 1.1; }
+  #readout .big.free { color: #7be3a8; }
+  #readout .big.quote { font-size: 18px; color: #ffce6b; }
+  #readout .det { font-size: 11.5px; opacity: 0.85; margin-top: 3px; }
+  #readout .hinttxt { font-size: 11px; opacity: 0.7; margin-top: 5px; }
+  .office-marker {
+    background: var(--navy); color: #fff; border-radius: 7px; padding: 3px 8px;
+    font-size: 11px; font-weight: 700; white-space: nowrap;
+    box-shadow: 0 1px 6px rgba(0,0,0,0.35); border: 1px solid #fff;
+  }
+  .leaflet-popup-content { margin: 11px 13px; font: 12px/1.5 -apple-system, "Segoe UI", Roboto, sans-serif; }
+  .pp-fee { font-size: 20px; font-weight: 800; color: var(--navy); }
+  .pp-fee.free { color: var(--free); }
+  .pp-fee.quote { color: #b06000; font-size: 15px; }
+  .pp-grid { margin-top: 5px; width: 100%; border-collapse: collapse; }
+  .pp-grid td { padding: 1px 0; font-variant-numeric: tabular-nums; }
+  .pp-grid td:last-child { text-align: right; font-weight: 600; }
+  .pp-note { margin-top: 5px; color: var(--muted); font-size: 10.5px; }
+</style>
+</head>
+<body>
+
+<div id="sidebar">
+  <h1>Travel Fee Lab</h1>
+  <p class="sub"><strong>Hover</strong> the map for a live price · <strong>click</strong> to pin a spot · right-click a pin to remove it.</p>
+
+  <div class="card">
+    <h2>Fee curve — pick the math</h2>
+    <div class="modelpick" id="modelPick">
+      <button data-m="engine">Engine<br>(linear+taper)</button>
+      <button data-m="power" class="active">Power<br>(x^p)</button>
+      <button data-m="scurve">S-curve<br>(capped)</button>
+    </div>
+    <p class="modeldesc" id="modelDesc"></p>
+    <canvas id="chart"></canvas>
+    <div id="params"></div>
+    <button class="btn" id="resetBtn">Reset this model's defaults</button>
+  </div>
+
+  <div class="card">
+    <h2>Heatmap</h2>
+    <label class="checkline"><input type="checkbox" id="heatToggle" checked> Paint fee bands on the map</label>
+    <div id="legend"></div>
+  </div>
+
+  <div class="card">
+    <h2>Routing</h2>
+    <input id="tokenInput" type="text" placeholder="Mapbox public token (pk.…) — optional, for exact road routing" autocomplete="off" spellcheck="false">
+    <div id="tokenStatus" class="warn"></div>
+    <label class="checkline" style="margin-top:7px"><input type="checkbox" id="excludeTolls" checked> Avoid toll roads (no 407)</label>
+  </div>
+
+  <div class="card">
+    <h2>Pinned spots <button class="btn btn-danger" id="clearBtn" style="float:right; margin-top:-4px">Clear</button></h2>
+    <ul id="pinsList"></ul>
+    <div id="noPins" class="pp-note">None yet — click the map to pin a spot.</div>
+  </div>
+
+  <div class="card">
+    <details>
+      <summary><h2 style="display:inline">Legacy zone table (reference)</h2></summary>
+      <table class="zone-table" style="margin-top:8px"><tbody id="zoneRows"></tbody></table>
+    </details>
+  </div>
+</div>
+
+<div id="mapwrap">
+  <div id="map"></div>
+  <canvas id="heat"></canvas>
+  <div id="readout">
+    <div class="big" id="roFee">—</div>
+    <div class="det" id="roDet">Move the mouse over the map</div>
+    <div class="hinttxt">Click to pin · hover to explore</div>
+  </div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script>
+'use strict';
+
+/* =============================================================== models ==
+ * Shared cost base (true cost is LINEAR in km and crew-minutes):
+ *   effort = 2 * (km_rate*km + time_rate*min)          <- round trip, $
+ * Then each model shapes billable fee from x = effort - allowance:
+ *
+ *  engine : the shipped booking.php engine. net = x, tapered above the knee.
+ *           Cost-true; flattest near-field differentiation.
+ *  power  : net = k * x^p  (k derived from an anchor: "$A at 75 km").
+ *           p>1 = convex everywhere (the "exponential feel") — UNCAPPED.
+ *  scurve : net = cap * x^p / (x^p + h^p).  Convex near, concave far,
+ *           hard ceiling `cap`. Fitted to the legacy zone ladder:
+ *           p=1.1, h=80, cap=160 reproduces zones 2-8 within ~$10.
+ * All models share min-fee, $5 rounding, and the auto-quote limits.       */
+
+const SHARED_DEFAULTS = {
+  km_rate: 0.55, time_rate: 0.30, allowance: 46,
+  min_fee: 15, round_to: 5, max_km: 250, max_min: 180, detour: 1.25,
+};
+const MODEL_DEFAULTS = {
+  engine: { knee: 105, taper: 0.25 },
+  power:  { p: 1.30, anchor_fee: 80 },          // anchor: fee at 75 km
+  scurve: { p: 1.10, h: 80, cap: 160 },
+};
+const MODEL_DESC = {
+  engine: 'Shipped engine: cost-true linear, long trips discounted past the knee. What booking.php charges today in distance mode.',
+  power:  'Convex growth (x^p): fees ramp harder with distance and never cap. p=1 is linear; p=2 is aggressive. Watch what it does to Kingston.',
+  scurve: 'S-curve: gentle leaving the free zone, steepest mid-range (30–90 km), capped far — the shape your legacy zone ladder actually follows.',
+};
+let model = 'power';
+let cfg = { ...SHARED_DEFAULTS, ...MODEL_DEFAULTS.power };
+
+function feeFor(roadKm, driveMin, c, m) {
+  roadKm = Math.max(0, roadKm); driveMin = Math.max(0, driveMin);
+  const effort = 2 * (c.km_rate * roadKm + c.time_rate * driveMin);
+  const out = { status: 'ok', fee: 0, km: roadKm, min: driveMin, effort, shaped: false, reason: '' };
+  if (roadKm > c.max_km || driveMin > c.max_min) {
+    out.status = 'quote_required'; out.reason = 'over_auto_limit'; return out;
+  }
+  const x = effort - c.allowance;
+  if (x <= 0) { out.reason = 'within_allowance'; return out; }
+  let net;
+  if (m === 'engine') {
+    net = x;
+    if (net > c.knee) { net = c.knee + (net - c.knee) * c.taper; out.shaped = true; }
+  } else if (m === 'power') {
+    const xAnchor = 2 * (c.km_rate + c.time_rate) * 75 - c.allowance;   // effort at 75 km, 60 km/h
+    const k = c.anchor_fee / Math.pow(Math.max(1, xAnchor), c.p);
+    net = k * Math.pow(x, c.p); out.shaped = true;
+  } else {
+    const xp = Math.pow(x, c.p);
+    net = c.cap * xp / (xp + Math.pow(c.h, c.p)); out.shaped = true;
+  }
+  net = Math.max(net, c.min_fee);
+  out.fee = Math.round(Math.round(net / c.round_to) * c.round_to * 100) / 100;
+  return out;
+}
+
+function haversineKm(aLat, aLng, bLat, bLng) {
+  const R = 6371, d2r = Math.PI / 180;
+  const dLat = (bLat - aLat) * d2r, dLng = (bLng - aLng) * d2r;
+  const s = Math.sin(dLat / 2) ** 2 + Math.cos(aLat * d2r) * Math.cos(bLat * d2r) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(s));
+}
+
+const OFFICES = [
+  { name: 'Ajax',       lat: 43.8823243, lng: -79.0185498 },
+  { name: 'North York', lat: 43.7709423, lng: -79.3292051 },
+];
+
+/* Estimate: straight-line * detour, 60 km/h; cheapest office BY EFFORT. */
+function estimateQuote(lat, lng) {
+  let best = null;
+  for (const o of OFFICES) {
+    const km = haversineKm(lat, lng, o.lat, o.lng) * cfg.detour;
+    const q = feeFor(km, km, cfg, model);
+    if (!best || q.effort < best.quote.effort) best = { office: o, quote: q, exact: false };
+  }
+  return best;
+}
+
+async function exactQuote(lat, lng, token, excludeTolls) {
+  const results = await Promise.all(OFFICES.map(async (o) => {
+    const url = new URL(`https://api.mapbox.com/directions/v5/mapbox/driving/` +
+      `${o.lng.toFixed(6)},${o.lat.toFixed(6)};${lng.toFixed(6)},${lat.toFixed(6)}`);
+    url.searchParams.set('overview', 'false');
+    url.searchParams.set('alternatives', 'false');
+    url.searchParams.set('access_token', token);
+    if (excludeTolls) url.searchParams.set('exclude', 'toll');
+    const body = await fetch(url).then(r => r.json()).catch(() => null);
+    if (!body || body.code !== 'Ok' || !body.routes || !body.routes[0]) return null;
+    return { office: o, km: body.routes[0].distance / 1000, min: body.routes[0].duration / 60 };
+  }));
+  let best = null;
+  for (const r of results) {
+    if (!r) continue;
+    const q = feeFor(r.km, r.min, cfg, model);
+    if (!best || q.effort < best.quote.effort) best = { office: r.office, quote: q, exact: true, rawKm: r.km, rawMin: r.min };
+  }
+  return best;
+}
+
+/* ================================================================== map == */
+const map = L.map('map').setView([43.82, -79.35], 9);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  maxZoom: 18, attribution: '&copy; OpenStreetMap contributors',
+}).addTo(map);
+
+for (const o of OFFICES) {
+  L.marker([o.lat, o.lng], {
+    // iconSize:null stops Leaflet forcing its 12x12 default onto the label pill
+    icon: L.divIcon({ className: '', html: `<div class="office-marker">🏢 ${o.name}</div>`, iconSize: null, iconAnchor: [10, 12] }),
+    interactive: false, zIndexOffset: 1000,
+  }).addTo(map);
+}
+
+/* ================================================================ heat == */
+const BANDS = [
+  { max: 0.001, color: [14, 138, 74],  label: 'No fee' },
+  { max: 25,    color: [141, 198, 63], label: '$15–25' },
+  { max: 45,    color: [244, 205, 48], label: '$30–45' },
+  { max: 65,    color: [246, 158, 39], label: '$50–65' },
+  { max: 90,    color: [236, 108, 32], label: '$70–90' },
+  { max: 120,   color: [219, 58, 44],  label: '$95–120' },
+  { max: 1e9,   color: [148, 29, 79],  label: '$125+' },
+];
+const QUOTE_COLOR = [115, 115, 125];
+const heatCv = document.getElementById('heat');
+const hctx = heatCv.getContext('2d');
+let heatOn = true;
+
+/* Custom pane: Leaflet's map pane is one atomic stacking context (it has a
+ * transform), so a sibling canvas can only ever sit fully above or fully
+ * below the WHOLE map — popups included. Inside a pane at z 350 the canvas
+ * paints above tiles (200) but below markers (600) and popups (700). */
+const heatPane = map.createPane('heatPane');
+heatPane.style.zIndex = '350';
+heatPane.style.pointerEvents = 'none';
+heatPane.appendChild(heatCv);
+
+function bandIndex(q) {
+  if (q.status !== 'ok') return -1;
+  for (let i = 0; i < BANDS.length; i++) if (q.fee <= BANDS[i].max) return i;
+  return BANDS.length - 1;
+}
+
+function drawHeat() {
+  const size = map.getSize();
+  const w = size.x, h = size.y;
+  if (!w || !h) { setTimeout(drawHeat, 250); return; }
+  heatCv.width = w; heatCv.height = h;
+  heatCv.style.width = w + 'px'; heatCv.style.height = h + 'px';
+  // The pane pans with the map; re-anchor the canvas to the viewport origin.
+  L.DomUtil.setPosition(heatCv, map.containerPointToLayerPoint([0, 0]));
+  hctx.clearRect(0, 0, w, h);
+  if (!heatOn) return;
+  const step = 9, alpha = 0.32;
+  const cols = Math.ceil(w / step), rows = Math.ceil(h / step);
+  const idx = new Int8Array(cols * rows);
+  for (let r = 0; r < rows; r++) {
+    for (let cI = 0; cI < cols; cI++) {
+      const ll = map.containerPointToLatLng([cI * step + step / 2, r * step + step / 2]);
+      idx[r * cols + cI] = bandIndex(estimateQuote(ll.lat, ll.lng).quote);
+    }
+  }
+  for (let r = 0; r < rows; r++) {
+    for (let cI = 0; cI < cols; cI++) {
+      const b = idx[r * cols + cI];
+      const col = b < 0 ? QUOTE_COLOR : BANDS[b].color;
+      hctx.fillStyle = `rgba(${col[0]},${col[1]},${col[2]},${alpha})`;
+      hctx.fillRect(cI * step, r * step, step, step);
+      // darker edge where the band changes -> readable contour lines
+      const leftDiff = cI > 0 && idx[r * cols + cI - 1] !== b;
+      const topDiff  = r > 0 && idx[(r - 1) * cols + cI] !== b;
+      if (leftDiff || topDiff) {
+        hctx.fillStyle = 'rgba(20,33,61,0.5)';
+        if (leftDiff) hctx.fillRect(cI * step, r * step, 2, step);
+        if (topDiff)  hctx.fillRect(cI * step, r * step, step, 2);
+      }
+    }
+  }
+}
+map.on('movestart zoomstart', () => { heatCv.style.opacity = '0'; });
+map.on('moveend zoomend resize', () => { drawHeat(); heatCv.style.opacity = '1'; });
+window.addEventListener('resize', drawHeat);
+
+/* ============================================================= readout == */
+const roFee = document.getElementById('roFee'), roDet = document.getElementById('roDet');
+const fmt$ = (n) => '$' + (Math.round(n * 100) / 100).toLocaleString('en-CA');
+let hoverTimer = null;
+map.on('mousemove', (e) => {
+  if (hoverTimer) return;
+  hoverTimer = setTimeout(() => { hoverTimer = null; }, 40);
+  const best = estimateQuote(e.latlng.lat, e.latlng.lng);
+  const q = best.quote;
+  if (q.status !== 'ok') {
+    roFee.className = 'big quote'; roFee.textContent = 'Quote required';
+    roDet.textContent = `${q.km.toFixed(0)} km — over the ${cfg.max_km} km auto limit`;
+  } else if (q.fee === 0) {
+    roFee.className = 'big free'; roFee.textContent = 'No fee';
+    roDet.textContent = `~${q.km.toFixed(0)} km from ${best.office.name} · within $${cfg.allowance} allowance`;
+  } else {
+    roFee.className = 'big'; roFee.textContent = fmt$(q.fee);
+    roDet.textContent = `~${q.km.toFixed(0)} km · ${q.min.toFixed(0)} min from ${best.office.name}`;
+  }
+});
+map.on('mouseout', () => {
+  roFee.className = 'big'; roFee.textContent = '—';
+  roDet.textContent = 'Move the mouse over the map';
+});
+
+/* ================================================================ pins == */
+let pins = []; let nextId = 1;
+
+function popupHtml(p) {
+  const r = p.result, q = r.quote;
+  let feeLine;
+  if (q.status !== 'ok') feeLine = `<div class="pp-fee quote">Quote required</div>`;
+  else if (q.fee === 0)  feeLine = `<div class="pp-fee free">No fee</div>`;
+  else                   feeLine = `<div class="pp-fee">${fmt$(q.fee)}</div>`;
+  const rows = [
+    ['Dispatch from', r.office.name],
+    ['One-way', `${q.km.toFixed(1)} km · ${q.min.toFixed(0)} min`],
+    ['Round-trip effort', fmt$(q.effort)],
+    ['Free allowance', '− ' + fmt$(cfg.allowance)],
+    ['Curve', model === 'engine' ? 'linear + taper' : model === 'power' ? `power p=${cfg.p}` : `S-curve p=${cfg.p}, cap ${fmt$(cfg.cap)}`],
+  ];
+  if (q.status !== 'ok') rows.push(['Reason', `over ${cfg.max_km} km / ${cfg.max_min} min one-way`]);
+  return feeLine +
+    `<table class="pp-grid">` + rows.map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join('') + `</table>` +
+    `<div class="pp-note">${r.exact ? 'Exact toll-free road route (Mapbox)' : 'Estimate: straight-line × ' + cfg.detour + ' @ 60 km/h'}</div>`;
+}
+
+function renderPinsList() {
+  const ul = document.getElementById('pinsList');
+  ul.innerHTML = '';
+  document.getElementById('noPins').style.display = pins.length ? 'none' : 'block';
+  for (const p of pins) {
+    const q = p.result.quote;
+    const li = document.createElement('li');
+    const feeTxt = q.status !== 'ok' ? 'Quote' : (q.fee === 0 ? 'Free' : fmt$(q.fee));
+    li.innerHTML =
+      `<span>#${p.id} · ${q.km.toFixed(1)} km${p.result.exact ? '' : ' ≈'}</span>` +
+      `<span class="fee">${feeTxt}</span>` +
+      `<button class="x" title="Remove" data-id="${p.id}">✕</button>`;
+    li.querySelector('.x').onclick = () => removePin(p.id);
+    li.onclick = (e) => { if (e.target.tagName !== 'BUTTON') p.marker.openPopup(); };
+    ul.appendChild(li);
+  }
+}
+
+function removePin(id) {
+  const i = pins.findIndex(p => p.id === id);
+  if (i < 0) return;
+  map.removeLayer(pins[i].marker);
+  if (pins[i].line) map.removeLayer(pins[i].line);
+  pins.splice(i, 1);
+  renderPinsList();
+}
+
+function attachResult(p, result, openPopup) {
+  p.result = result;
+  if (p.line) map.removeLayer(p.line);
+  p.line = L.polyline([[result.office.lat, result.office.lng], [p.lat, p.lng]],
+    { color: '#1f3a6d', weight: 2, dashArray: '5 6', opacity: 0.6, interactive: false }).addTo(map);
+  p.marker.bindPopup(popupHtml(p));
+  if (openPopup) p.marker.openPopup();
+  renderPinsList();
+}
+
+async function priceAndAttach(p) {
+  attachResult(p, estimateQuote(p.lat, p.lng), true);
+  const token = getToken();
+  if (!token) return;
+  const exact = await exactQuote(p.lat, p.lng, token, document.getElementById('excludeTolls').checked);
+  if (exact && pins.includes(p)) attachResult(p, exact, true);
+}
+
+map.on('click', (e) => {
+  const p = { id: nextId++, lat: e.latlng.lat, lng: e.latlng.lng, marker: null, line: null, result: null };
+  p.marker = L.marker([p.lat, p.lng]).addTo(map);
+  p.marker.on('contextmenu', () => removePin(p.id));
+  pins.push(p);
+  priceAndAttach(p);
+});
+document.getElementById('clearBtn').onclick = () => { while (pins.length) removePin(pins[0].id); };
+
+function repriceAll() {
+  for (const p of pins) {
+    if (p.result && p.result.exact) {
+      const q = feeFor(p.result.rawKm, p.result.rawMin, cfg, model);
+      attachResult(p, { ...p.result, quote: q }, false);
+    } else {
+      attachResult(p, estimateQuote(p.lat, p.lng), false);
+    }
+  }
+  drawChart();
+  drawHeat();
+}
+
+/* =============================================================== chart ==
+ * Fee vs one-way road km (60 km/h assumption), with the legacy zone fees
+ * plotted as dots at each zone's rough road distance for comparison.      */
+const LEGACY_DOTS = [ // [approx one-way road km, fee]
+  [15, 0], [35, 20], [50, 40], [65, 60], [75, 80], [110, 100], [130, 120], [200, 140],
+];
+const chart = document.getElementById('chart');
+
+function feeAtKm(km) { return feeFor(km, km, cfg, model); }
+
+function drawChart() {
+  const dpr = window.devicePixelRatio || 1;
+  const w = chart.clientWidth, h = chart.clientHeight;
+  chart.width = w * dpr; chart.height = h * dpr;
+  const g = chart.getContext('2d');
+  g.scale(dpr, dpr);
+  g.clearRect(0, 0, w, h);
+  const padL = 34, padB = 22, padT = 10, padR = 8;
+  const X = (km) => padL + (km / 260) * (w - padL - padR);
+  const Y = (fee) => (h - padB) - (Math.min(fee, 200) / 200) * (h - padB - padT);
+  // grid + axes
+  g.font = '10px sans-serif'; g.fillStyle = '#8a93a3'; g.strokeStyle = '#eef1f6'; g.lineWidth = 1;
+  for (const f of [0, 50, 100, 150, 200]) {
+    g.beginPath(); g.moveTo(padL, Y(f)); g.lineTo(w - padR, Y(f)); g.stroke();
+    g.fillText('$' + f, 4, Y(f) + 3);
+  }
+  for (const km of [50, 100, 150, 200, 250]) {
+    g.fillText(km + 'km', X(km) - 12, h - 8);
+  }
+  // quote-limit shading
+  g.fillStyle = 'rgba(120,120,130,0.12)';
+  g.fillRect(X(cfg.max_km), padT, (w - padR) - X(cfg.max_km), h - padB - padT);
+  // legacy dots
+  g.fillStyle = '#c2432f';
+  for (const [km, fee] of LEGACY_DOTS) {
+    g.beginPath(); g.arc(X(km), Y(fee), 3, 0, Math.PI * 2); g.fill();
+  }
+  g.fillStyle = '#c2432f'; g.fillText('● legacy zones', w - 82, padT + 10);
+  // active curve
+  g.strokeStyle = '#1f3a6d'; g.lineWidth = 2.25; g.beginPath();
+  let started = false;
+  for (let km = 0; km <= 260; km += 2) {
+    const q = feeAtKm(km);
+    if (q.status !== 'ok') break;
+    const yy = Y(q.fee);
+    if (!started) { g.moveTo(X(km), yy); started = true; } else g.lineTo(X(km), yy);
+  }
+  g.stroke();
+}
+
+/* =============================================================== panel == */
+const PARAM_SPECS = {
+  shared: [
+    ['allowance', 'Free allowance', 0, 150, 1, '$'],
+    ['km_rate',   'Cost per km',    0.30, 1.50, 0.01, '$'],
+    ['time_rate', 'Cost per minute',0.10, 1.50, 0.01, '$'],
+    ['min_fee',   'Minimum fee',    0, 40, 1, '$'],
+    ['max_km',    'Auto-quote limit (km)', 50, 500, 10, ''],
+  ],
+  engine: [
+    ['knee',  'Taper starts at', 40, 300, 5, '$'],
+    ['taper', 'Rate beyond knee', 0.10, 1.00, 0.05, '×'],
+  ],
+  power: [
+    ['p',          'Exponent p', 1.00, 2.00, 0.05, '×'],
+    ['anchor_fee', 'Fee at 75 km', 30, 150, 5, '$'],
+  ],
+  scurve: [
+    ['p',   'Steepness p', 0.80, 2.50, 0.05, '×'],
+    ['h',   'Half-fee point h', 30, 200, 5, '$'],
+    ['cap', 'Fee ceiling', 100, 300, 5, '$'],
+  ],
+};
+
+function buildParams() {
+  const wrap = document.getElementById('params');
+  wrap.innerHTML = '';
+  for (const [key, name, min, max, step, unit] of [...PARAM_SPECS[model], ...PARAM_SPECS.shared]) {
+    const lab = document.createElement('label');
+    lab.className = 'param';
+    lab.innerHTML =
+      `<div class="row"><span class="name">${name}</span><span class="val"></span></div>` +
+      `<input type="range" min="${min}" max="${max}" step="${step}" value="${cfg[key]}">`;
+    wrap.appendChild(lab);
+    const slider = lab.querySelector('input'), val = lab.querySelector('.val');
+    const show = () => { val.textContent = (unit === '×' ? '' : unit) + Number(cfg[key]).toFixed(step < 1 ? 2 : 0) + (unit === '×' ? '×' : ''); };
+    show();
+    slider.oninput = () => { cfg[key] = Number(slider.value); show(); repriceAll(); };
+  }
+  document.getElementById('modelDesc').textContent = MODEL_DESC[model];
+}
+
+document.getElementById('modelPick').addEventListener('click', (e) => {
+  const b = e.target.closest('button'); if (!b) return;
+  model = b.dataset.m;
+  document.querySelectorAll('#modelPick button').forEach(x => x.classList.toggle('active', x === b));
+  cfg = { ...SHARED_DEFAULTS, ...MODEL_DEFAULTS[model],
+          // keep the shared knobs the user already moved
+          ...Object.fromEntries(PARAM_SPECS.shared.map(([k]) => [k, cfg[k]])) };
+  buildParams(); repriceAll();
+});
+document.getElementById('resetBtn').onclick = () => {
+  cfg = { ...SHARED_DEFAULTS, ...MODEL_DEFAULTS[model] };
+  buildParams(); repriceAll();
+};
+
+/* ============================================================== extras == */
+(function buildLegend() {
+  const el = document.getElementById('legend');
+  const rows = BANDS.map(b =>
+    `<div class="legend-row"><span class="swatch" style="background:rgba(${b.color[0]},${b.color[1]},${b.color[2]},0.55)"></span>${b.label}</div>`);
+  rows.push(`<div class="legend-row"><span class="swatch" style="background:rgba(${QUOTE_COLOR[0]},${QUOTE_COLOR[1]},${QUOTE_COLOR[2]},0.55)"></span>Quote required</div>`);
+  el.innerHTML = rows.join('');
+})();
+
+const ZONES = [
+  [1, 0,   'Scarborough · East Toronto · Downtown Toronto · North York · Markham · Pickering · Ajax · Whitby'],
+  [2, 20,  'Etobicoke · Oshawa · Richmond Hill · Mississauga · Brampton · Stouffville · Vaughan · Newmarket · Aurora'],
+  [3, 40,  'Oakville · Clarington · Uxbridge · Scugog · West/East Gwillimbury'],
+  [4, 60,  'Milton · Burlington · Halton Hills · Caledon · Georgina · Bolton · Nobleton'],
+  [5, 80,  'Hamilton · Brock Township'],
+  [6, 100, 'Waterloo'],
+  [7, 120, 'Niagara Falls'],
+  [8, 140, 'Kingston · Muskoka · London'],
+];
+(function buildZoneTable() {
+  document.getElementById('zoneRows').innerHTML = ZONES.map(([z, fee, areas]) =>
+    `<tr><td><strong>Zone ${z}</strong><div class="areas">${areas}</div></td>` +
+    `<td class="fee ${fee === 0 ? 'free' : ''}">${fee === 0 ? 'No fee' : '$' + fee}</td></tr>`).join('');
+})();
+
+const TOKEN_KEY = 'ttf_mapbox_token';
+function getToken() {
+  const t = (document.getElementById('tokenInput').value || '').trim();
+  return /^pk\./.test(t) ? t : '';
+}
+function updateTokenStatus() {
+  const el = document.getElementById('tokenStatus');
+  if (getToken()) { el.className = 'ok'; el.textContent = 'Token set — pins use exact toll-free road routing.'; }
+  else { el.className = 'warn'; el.textContent = 'No token — estimate mode (straight-line × 1.25 @ 60 km/h), same as the engine’s own fallback.'; }
+}
+const tokenInput = document.getElementById('tokenInput');
+tokenInput.value = localStorage.getItem(TOKEN_KEY) || '';
+tokenInput.addEventListener('input', () => { localStorage.setItem(TOKEN_KEY, tokenInput.value.trim()); updateTokenStatus(); });
+document.getElementById('heatToggle').onchange = (e) => { heatOn = e.target.checked; drawHeat(); };
+
+/* ================================================================ boot == */
+buildParams();
+updateTokenStatus();
+drawChart();
+map.whenReady(() => { setTimeout(drawHeat, 300); setTimeout(drawHeat, 1200); });
+</script>
+</body>
+</html>
