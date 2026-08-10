@@ -112,6 +112,7 @@
     <canvas id="chart"></canvas>
     <div id="params"></div>
     <button class="btn" id="resetBtn">Reset this model's defaults</button>
+    <button class="btn" id="shareBtn" style="margin-left:6px">Copy settings link</button>
   </div>
 
   <div class="card">
@@ -176,7 +177,7 @@ const SHARED_DEFAULTS = {
 };
 const MODEL_DEFAULTS = {
   engine: { knee: 105, taper: 0.25 },
-  power:  { p: 1.30, anchor_fee: 80 },          // anchor: fee at 75 km
+  power:  { p: 1.20, anchor_fee: 55 },          // anchor: fee at 75 km
   scurve: { p: 1.10, h: 80, cap: 160 },
 };
 const MODEL_DESC = {
@@ -279,7 +280,10 @@ const BANDS = [
   { max: 65,    color: [246, 158, 39], label: '$50–65' },
   { max: 90,    color: [236, 108, 32], label: '$70–90' },
   { max: 120,   color: [219, 58, 44],  label: '$95–120' },
-  { max: 1e9,   color: [148, 29, 79],  label: '$125+' },
+  { max: 150,   color: [148, 29, 79],  label: '$125–150' },
+  { max: 200,   color: [113, 25, 110], label: '$155–200' },
+  { max: 260,   color: [78, 22, 122],  label: '$205–260' },
+  { max: 1e9,   color: [47, 15, 92],   label: '$265+' },
 ];
 const QUOTE_COLOR = [115, 115, 125];
 const heatCv = document.getElementById('heat');
@@ -442,7 +446,33 @@ map.on('click', (e) => {
 });
 document.getElementById('clearBtn').onclick = () => { while (pins.length) removePin(pins[0].id); };
 
+/* Settings live in the URL hash so a copied link reproduces the exact
+ * curve — model + every slider. Applied at boot, rewritten on any change. */
+let hashTimer = null;
+function writeHashNow() {
+  const p = new URLSearchParams({ m: model });
+  for (const k of Object.keys(cfg)) p.set(k, cfg[k]);
+  history.replaceState(null, '', '#' + p.toString());
+}
+function writeHash() {
+  // Debounced: sliders fire per-pixel and browsers throttle replaceState.
+  clearTimeout(hashTimer);
+  hashTimer = setTimeout(writeHashNow, 250);
+}
+function applyHash() {
+  const h = new URLSearchParams(location.hash.slice(1));
+  const m = h.get('m');
+  if (m && MODEL_DEFAULTS[m]) model = m;
+  cfg = { ...SHARED_DEFAULTS, ...MODEL_DEFAULTS[model] };
+  for (const [k, v] of h) {
+    if (k !== 'm' && k in cfg && Number.isFinite(Number(v))) cfg[k] = Number(v);
+  }
+  document.querySelectorAll('#modelPick button').forEach(x =>
+    x.classList.toggle('active', x.dataset.m === model));
+}
+
 function repriceAll() {
+  writeHash();
   for (const p of pins) {
     if (p.result && p.result.exact) {
       const q = feeFor(p.result.rawKm, p.result.rawMin, cfg, model);
@@ -473,15 +503,25 @@ function drawChart() {
   g.scale(dpr, dpr);
   g.clearRect(0, 0, w, h);
   const padL = 34, padB = 22, padT = 10, padR = 8;
-  const X = (km) => padL + (km / 260) * (w - padL - padR);
-  const Y = (fee) => (h - padB) - (Math.min(fee, 200) / 200) * (h - padB - padT);
+  // Domain follows the auto-quote limits (time limit binds at 60 km/h too).
+  const kmMax = Math.max(260, Math.min(cfg.max_km, cfg.max_min) * 1.08);
+  let feeMax = 200;
+  for (let km = 0; km <= kmMax; km += kmMax / 60) {
+    const q = feeAtKm(km);
+    if (q.status === 'ok') feeMax = Math.max(feeMax, q.fee);
+  }
+  feeMax = Math.ceil(feeMax / 50) * 50;
+  const X = (km) => padL + (km / kmMax) * (w - padL - padR);
+  const Y = (fee) => (h - padB) - (Math.min(fee, feeMax) / feeMax) * (h - padB - padT);
   // grid + axes
   g.font = '10px sans-serif'; g.fillStyle = '#8a93a3'; g.strokeStyle = '#eef1f6'; g.lineWidth = 1;
-  for (const f of [0, 50, 100, 150, 200]) {
+  const fStep = Math.ceil(feeMax / 4 / 50) * 50;
+  for (let f = 0; f <= feeMax; f += fStep) {
     g.beginPath(); g.moveTo(padL, Y(f)); g.lineTo(w - padR, Y(f)); g.stroke();
     g.fillText('$' + f, 4, Y(f) + 3);
   }
-  for (const km of [50, 100, 150, 200, 250]) {
+  const kStep = kmMax > 600 ? 200 : kmMax > 320 ? 100 : 50;
+  for (let km = kStep; km <= kmMax; km += kStep) {
     g.fillText(km + 'km', X(km) - 12, h - 8);
   }
   // quote-limit shading
@@ -496,7 +536,7 @@ function drawChart() {
   // active curve
   g.strokeStyle = '#1f3a6d'; g.lineWidth = 2.25; g.beginPath();
   let started = false;
-  for (let km = 0; km <= 260; km += 2) {
+  for (let km = 0; km <= kmMax; km += kmMax / 130) {
     const q = feeAtKm(km);
     if (q.status !== 'ok') break;
     const yy = Y(q.fee);
@@ -512,7 +552,8 @@ const PARAM_SPECS = {
     ['km_rate',   'Cost per km',    0.30, 1.50, 0.01, '$'],
     ['time_rate', 'Cost per minute',0.10, 1.50, 0.01, '$'],
     ['min_fee',   'Minimum fee',    0, 40, 1, '$'],
-    ['max_km',    'Auto-quote limit (km)', 50, 500, 10, ''],
+    ['max_km',    'Auto-quote limit (km)', 50, 1000, 10, ''],
+    ['max_min',   'Auto-quote limit (min)', 60, 720, 10, ''],
   ],
   engine: [
     ['knee',  'Taper starts at', 40, 300, 5, '$'],
@@ -560,6 +601,17 @@ document.getElementById('resetBtn').onclick = () => {
   cfg = { ...SHARED_DEFAULTS, ...MODEL_DEFAULTS[model] };
   buildParams(); repriceAll();
 };
+document.getElementById('shareBtn').onclick = async (e) => {
+  clearTimeout(hashTimer);
+  writeHashNow();
+  try {
+    await navigator.clipboard.writeText(location.href);
+    e.target.textContent = 'Copied!';
+  } catch {
+    e.target.textContent = 'Copy the address bar URL';
+  }
+  setTimeout(() => { e.target.textContent = 'Copy settings link'; }, 1800);
+};
 
 /* ============================================================== extras == */
 (function buildLegend() {
@@ -602,6 +654,7 @@ tokenInput.addEventListener('input', () => { localStorage.setItem(TOKEN_KEY, tok
 document.getElementById('heatToggle').onchange = (e) => { heatOn = e.target.checked; drawHeat(); };
 
 /* ================================================================ boot == */
+applyHash();
 buildParams();
 updateTokenStatus();
 drawChart();
